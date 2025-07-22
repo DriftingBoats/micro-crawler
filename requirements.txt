@@ -1,0 +1,38 @@
+# 微博头条文章爬虫依赖项
+# 基础HTTP请求库
+requests>=2.31.0
+
+# HTML解析库
+beautifulsoup4>=4.12.0
+lxml>=4.9.3
+
+# URL解析和处理（Python标准库，无需安装）
+# urllib.parse
+
+# JSON处理（Python标准库，无需安装）
+# json
+
+# 时间处理（Python标准库，无需安装）
+# time
+# datetime
+
+# 正则表达式（Python标准库，无需安装）
+# re
+
+# 文件系统操作（Python标准库，无需安装）
+# os
+
+# 命令行参数解析（Python标准库，无需安装）
+# argparse
+
+# 系统相关（Python标准库，无需安装）
+# sys
+
+# 可选：Selenium浏览器自动化（如需要处理复杂页面）
+# selenium>=4.15.0
+
+# 可选：如果需要更好的HTML解析
+# html5lib>=1.1
+
+# 可选：如果需要处理JavaScript渲染的页面
+# playwright>=1.40.0
