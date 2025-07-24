@@ -9,12 +9,12 @@ import requests
 import json
 import time
 import re
-from urllib.parse import urljoin, urlparse, parse_qs, unquote
+from urllib.parse import  urlparse, parse_qs
 import os
 from datetime import datetime
 from bs4 import BeautifulSoup
 import argparse
-import sys
+from zhconv import convert
 
 class WeiboTTArticleCrawler:
     def __init__(self, cookies_file=None, cookies_dict=None):
@@ -286,6 +286,95 @@ class WeiboTTArticleCrawler:
         
         return text
     
+    def clean_invisible_characters(self, text):
+        """清理文本中的不可见字符和特殊空白符"""
+        if not text:
+            return text
+        
+        # 定义需要清理的不可见字符
+        invisible_chars = {
+            '\u00A0': ' ',  # 不间断空格 (Non-breaking Space) -> 普通空格
+            '\u200B': '',   # 零宽空格 (Zero-width space) -> 删除
+            '\u200C': '',   # 零宽非连字符 (Zero-width non-joiner) -> 删除
+            '\u200D': '',   # 零宽连字符 (Zero-width joiner) -> 删除
+            '\u2060': '',   # 词连接符 (Word joiner) -> 删除
+            '\uFEFF': '',   # 零宽非断空格 (Zero-width no-break space) -> 删除
+            '\u180E': '',   # 蒙古文元音分隔符 (Mongolian vowel separator) -> 删除
+            '\u2000': ' ',  # En quad -> 普通空格
+            '\u2001': ' ',  # Em quad -> 普通空格
+            '\u2002': ' ',  # En space -> 普通空格
+            '\u2003': ' ',  # Em space -> 普通空格
+            '\u2004': ' ',  # Three-per-em space -> 普通空格
+            '\u2005': ' ',  # Four-per-em space -> 普通空格
+            '\u2006': ' ',  # Six-per-em space -> 普通空格
+            '\u2007': ' ',  # Figure space -> 普通空格
+            '\u2008': ' ',  # Punctuation space -> 普通空格
+            '\u2009': ' ',  # Thin space -> 普通空格
+            '\u200A': ' ',  # Hair space -> 普通空格
+            '\u202F': ' ',  # Narrow no-break space -> 普通空格
+            '\u205F': ' ',  # Medium mathematical space -> 普通空格
+            '\u3000': ' ',  # 全角空格 -> 普通空格
+        }
+        
+        # 替换不可见字符
+        for invisible_char, replacement in invisible_chars.items():
+            text = text.replace(invisible_char, replacement)
+        
+        return text
+    
+    def convert_to_simplified_fullwidth(self, text):
+        """将繁体中文转换为简体中文，并将半角标点转换为全角标点"""
+        if not text:
+            return text
+        
+        # 0. 首先清理不可见字符
+        text = self.clean_invisible_characters(text)
+        
+        # 1. 繁体转简体（如果zhconv可用）
+        if convert is not None:
+            try:
+                text = convert(text, 'zh-cn')
+            except Exception as e:
+                print(f"繁体转简体失败: {e}")
+        
+        # 2. 半角到全角标点符号映射（不包括引号）
+        half_to_full_map_base = {
+            '!': '！', '(': '（', ')': '）', ',': '，', ':': '：', ';': '；', '?': '？', '[': '【', ']': '】'
+        }
+        
+        # 3. 智能处理双引号和单引号
+        in_double_quote = False
+        in_single_quote = False
+        processed_content_with_quotes = []
+        
+        for char in text:
+            if char == '"':
+                if not in_double_quote:
+                    processed_content_with_quotes.append('"')
+                    in_double_quote = True
+                else:
+                    processed_content_with_quotes.append('"')
+                    in_double_quote = False
+            elif char == "'":
+                if not in_single_quote:
+                    processed_content_with_quotes.append(''')
+                    in_single_quote = True
+                else:
+                    processed_content_with_quotes.append(''')
+                    in_single_quote = False
+            else:
+                processed_content_with_quotes.append(char)
+        
+        # 转换回字符串
+        content_after_quotes = "".join(processed_content_with_quotes)
+        
+        # 4. 转换其他半角符号为全角（不包括已处理的引号）
+        final_fullwidth_content = []
+        for char in content_after_quotes:
+            final_fullwidth_content.append(half_to_full_map_base.get(char, char))
+        
+        return "".join(final_fullwidth_content)
+    
     def extract_formatted_text(self, element):
         """提取保留换行格式的文本内容"""
         if not element:
@@ -387,9 +476,34 @@ class WeiboTTArticleCrawler:
                                 print(f"标题解码失败: {e}")
                         article_data['title'] = title
                         
-                        # 提取作者UID
+                        # 提取作者信息
                         if 'uid' in data:
                             article_data['author_uid'] = str(data['uid'])
+                        
+                        # 尝试从多个字段提取作者名称
+                        author_name = ''
+                        if 'author' in data:
+                            author_name = data['author']
+                        elif 'author_name' in data:
+                            author_name = data['author_name']
+                        elif 'user_name' in data:
+                            author_name = data['user_name']
+                        elif 'screen_name' in data:
+                            author_name = data['screen_name']
+                        elif 'nickname' in data:
+                            author_name = data['nickname']
+                        
+                        if author_name:
+                            # 处理Unicode编码的作者名称
+                            try:
+                                if r'\u' in str(author_name):
+                                    author_name = str(author_name).encode('utf-8').decode('unicode_escape')
+                            except Exception as e:
+                                print(f"作者名称解码失败: {e}")
+                            article_data['author'] = str(author_name)
+                            print(f"提取到作者: {author_name}")
+                        else:
+                            print(f"未找到作者信息，数据键: {list(data.keys())}")
                         
                         # 提取发布时间
                         article_data['publish_time'] = data.get('create_at', data.get('complete_create_at', ''))
@@ -487,6 +601,25 @@ class WeiboTTArticleCrawler:
                                 content = content.replace('<br>', '\n').replace('<br/>', '\n').replace('<br />', '\n')
                                 content = re.sub(r'<[^>]+>', '', content)
                                 article_data['content'] = content
+                            
+                            # 提取作者信息
+                            if 'user' in data:
+                                user_info = data['user']
+                                if isinstance(user_info, dict):
+                                    author_name = user_info.get('screen_name', user_info.get('name', ''))
+                                    if author_name:
+                                        article_data['author'] = author_name
+                                        print(f"从user字段提取到作者: {author_name}")
+                                    if 'id' in user_info:
+                                        article_data['author_uid'] = str(user_info['id'])
+                            elif 'author' in data:
+                                article_data['author'] = data['author']
+                            elif 'screen_name' in data:
+                                article_data['author'] = data['screen_name']
+                            
+                            # 提取发布时间
+                            if 'created_at' in data:
+                                article_data['publish_time'] = data['created_at']
                     
                     # 如果找到了内容，返回
                     if article_data.get('content') or article_data.get('title'):
@@ -542,21 +675,49 @@ class WeiboTTArticleCrawler:
                 '.WB_detail .author',
                 '.author-name',
                 '.username',
-                '[class*="author"]'
+                '.user-name',
+                '.screen-name',
+                '.nickname',
+                '.WB_detail .WB_cardwrap .WB_info .W_f14',
+                '.WB_info .W_f14',
+                '.author',
+                '.user',
+                '[class*="author"]',
+                '[class*="user"]',
+                '[data-author]',
+                'a[href*="/u/"]',
+                'a[href*="weibo.com/"]'
             ]
             
             for selector in author_selectors:
                 author_elem = soup.select_one(selector)
                 if author_elem and author_elem.get_text(strip=True):
-                    article_data['author'] = author_elem.get_text(strip=True)
-                    # 尝试从链接中提取UID
-                    author_link = author_elem.find('a')
-                    if author_link and author_link.get('href'):
-                        href = author_link.get('href')
-                        uid_match = re.search(r'/(?:u/)?([0-9]+)', href)
-                        if uid_match:
-                            article_data['author_uid'] = uid_match.group(1)
-                    break
+                    author_text = author_elem.get_text(strip=True)
+                    # 清理作者名称中的多余信息
+                    author_text = author_text.split('\n')[0].strip()  # 取第一行
+                    author_text = re.sub(r'\s+', ' ', author_text)  # 合并多个空格
+                    if len(author_text) > 0 and len(author_text) < 50:  # 合理的作者名称长度
+                        article_data['author'] = author_text
+                        print(f"通过选择器 {selector} 找到作者: {author_text}")
+                        
+                        # 尝试从链接中提取UID
+                        author_link = author_elem.find('a') if author_elem.name != 'a' else author_elem
+                        if author_link and author_link.get('href'):
+                            href = author_link.get('href')
+                            uid_match = re.search(r'/(?:u/)?([0-9]+)', href)
+                            if uid_match:
+                                article_data['author_uid'] = uid_match.group(1)
+                                print(f"提取到作者UID: {uid_match.group(1)}")
+                        break
+            
+            # 如果还没找到作者，尝试从data属性中提取
+            if not article_data.get('author'):
+                author_data_elem = soup.find(attrs={'data-author': True})
+                if author_data_elem:
+                    author_name = author_data_elem.get('data-author')
+                    if author_name:
+                        article_data['author'] = author_name
+                        print(f"从data-author属性找到作者: {author_name}")
             
             # 查找发布时间
             time_selectors = [
@@ -608,6 +769,31 @@ class WeiboTTArticleCrawler:
                     match = re.search(pattern, html_content)
                     if match:
                         article_data['author_uid'] = match.group(1)
+                        print(f"从页面内容提取到UID: {match.group(1)}")
+                        break
+            
+            # 如果还没有作者信息，尝试从页面内容中提取作者名称
+            if not article_data.get('author'):
+                author_patterns = [
+                    r'"author"\s*:\s*"([^"]+)"',
+                    r'"screen_name"\s*:\s*"([^"]+)"',
+                    r'"user_name"\s*:\s*"([^"]+)"',
+                    r'"nickname"\s*:\s*"([^"]+)"',
+                    r'"author_name"\s*:\s*"([^"]+)"',
+                ]
+                
+                for pattern in author_patterns:
+                    match = re.search(pattern, html_content)
+                    if match:
+                        author_name = match.group(1)
+                        # 处理Unicode编码
+                        try:
+                            if r'\u' in author_name:
+                                author_name = author_name.encode('utf-8').decode('unicode_escape')
+                        except Exception as e:
+                            print(f"作者名称解码失败: {e}")
+                        article_data['author'] = author_name
+                        print(f"从页面内容提取到作者: {author_name}")
                         break
             
             # 从script标签中查找JSON数据
@@ -847,44 +1033,50 @@ class WeiboTTArticleCrawler:
             
             # 保存markdown格式
             md_filename = f"ttarticle_chapters_{timestamp}.md"
+            
+            # 先组装所有内容为完整文本
+            full_content = []
+            
+            if all_chapters:
+                # 组装所有章节内容
+                for i, chapter in enumerate(all_chapters):
+                    title = chapter.get('title', '未知')
+                    full_content.append(f"## {title}\n\n")
+                    
+                    content = chapter.get('content', '无内容')
+                    # content中多行换行改成只空一行，没空行也换成空一行
+                    import re
+                    # 将多个连续换行符替换为双个换行符（一个空行）
+                    formatted_content = re.sub(r'\n\s*\n+', '\n\n', content)
+                    # 将单个换行符也替换为双个换行符（确保段落间有空行）
+                    formatted_content = re.sub(r'(?<!\n)\n(?!\n)', '\n\n', formatted_content)
+                    full_content.append(f"{formatted_content}\n\n")
+            
+            if other_articles:
+                for i, article in enumerate(other_articles, 1):
+                    title = article.get('title', '未知')
+                    full_content.append(f"## {title}\n")
+                    
+                    article_url = article.get('url', '无链接')
+                    full_content.append(f"{article_url}\n")
+                    
+                    content = article.get('content', '无内容')[:200] + '...'
+                    import re
+                    formatted_content = re.sub(r'\n\s*\n+', '\n', content)
+                    full_content.append(f"{formatted_content}\n\n")
+            
+            # 将所有内容合并为一个字符串
+            final_text = ''.join(full_content)
+            
+            # 统一进行盘古之白格式化处理
+            final_formatted_text = self.add_pangu_spacing(final_text)
+            
+            # 应用繁体转简体和标点符号转换
+            final_converted_text = self.convert_to_simplified_fullwidth(final_formatted_text)
+            
+            # 写入文件
             with open(md_filename, 'w', encoding='utf-8') as f:
-                if all_chapters:
-                    # 保存所有章节
-                    for i, chapter in enumerate(all_chapters):
-                        # 标题改为二级标题格式
-                        title = chapter.get('title', '未知')
-                        # 对标题也应用盘古之白格式化
-                        formatted_title = self.add_pangu_spacing(title)
-                        f.write(f"## {formatted_title}\n\n")
-                        
-                        # 保留原来的Content获得的样式，title和content中间空一行
-                        content = chapter.get('content', '无内容')
-                        # content中多行换行改成只空一行，没空行也换成空一行
-                        import re
-                        # 将多个连续换行符替换为双个换行符（一个空行）
-                        formatted_content = re.sub(r'\n\s*\n+', '\n\n', content)
-                        # 将单个换行符也替换为双个换行符（确保段落间有空行）
-                        formatted_content = re.sub(r'(?<!\n)\n(?!\n)', '\n\n', formatted_content)
-                        # 应用盘古之白格式化
-                        formatted_content = self.add_pangu_spacing(formatted_content)
-                        f.write(f"{formatted_content}\n\n")
-                
-                if other_articles:
-                    for i, article in enumerate(other_articles, 1):
-                        title = article.get('title', '未知')
-                        # 对标题也应用盘古之白格式化
-                        formatted_title = self.add_pangu_spacing(title)
-                        f.write(f"## {formatted_title}\n")
-                        
-                        article_url = article.get('url', '无链接')
-                        f.write(f"{article_url}\n")
-                        
-                        content = article.get('content', '无内容')[:200] + '...'
-                        import re
-                        formatted_content = re.sub(r'\n\s*\n+', '\n', content)
-                        # 对其他文章内容也应用盘古之白格式化
-                        formatted_content = self.add_pangu_spacing(formatted_content)
-                        f.write(f"{formatted_content}\n\n")
+                f.write(final_converted_text)
             
             print(f"Markdown格式结果已保存到: {md_filename}")
             return json_filename, md_filename

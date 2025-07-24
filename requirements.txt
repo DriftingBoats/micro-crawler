@@ -6,6 +6,9 @@ requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=4.9.3
 
+## 繁体转简体
+zhconv
+
 # URL解析和处理（Python标准库，无需安装）
 # urllib.parse
 
